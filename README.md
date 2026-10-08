@@ -225,11 +225,11 @@ Connections open lazily on the right endpoint (public, private or business). Two
 
 Any other channel: `stream.Subscribe(ctx, okx.Arg{Channel: "...", InstID: "..."})` delivers raw `okx.Push` messages.
 
-Messages are delivered in order and never dropped. A subscriber that stops reading for longer than its buffer stalls its connection, so read promptly or hand messages off to your own queue.
+Messages are delivered in order and never dropped. A slow reader never blocks the connection or other subscriptions: its undelivered messages wait in memory until it reads them.
 
 ### Reconnects
 
-On disconnect the stream reconnects with exponential backoff, logs in again and restores every subscription. Messages sent while it was disconnected are lost, so reconcile private state when that happens:
+On disconnect the stream reconnects with exponential backoff, logs in again and restores every subscription. Each restored subscription is confirmed by OKX; one that OKX now rejects (for example, a delisted instrument) is logged and its channel is closed. Messages sent while the stream was disconnected are lost, so reconcile private state when the hook fires:
 
 ```go
 stream := okx.NewStream(
@@ -263,7 +263,7 @@ for update := range sub.C {
 
 ### WebSocket trading
 
-The same requests as REST, sent over the private WebSocket:
+The same requests as REST, sent over the private WebSocket. They go through the same per-instrument rate limiter and honor `WithRequestTTL`:
 
 ```go
 res, err := stream.PlaceOrder(ctx, okx.PlaceOrderRequest{...})
@@ -298,7 +298,7 @@ if okx.HasCode(err, "51121") { // any OKX code, top level or per item
 
 ## Rate limits and retries
 
-Each wrapped endpoint has a token bucket set to its documented OKX limit, and trade endpoints are limited per instrument, as OKX does. Requests wait for a token instead of being rejected. Turn it off with `WithoutRateLimit()` if you run your own limiter.
+Each wrapped endpoint has a token bucket set to its documented OKX limit, and trade endpoints are limited per instrument, as OKX does. Batch requests take one token per order. Requests wait for a token instead of being rejected. Turn it off with `WithoutRateLimit()` if you run your own limiter.
 
 Retries use exponential backoff with jitter:
 

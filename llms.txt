@@ -112,7 +112,7 @@ client.SyncTime(ctx) error — align signature timestamps with server time.
 
 ## Stream
 
-Each returns (*Subscription[T], error); read sub.C, stop with sub.Unsubscribe(ctx).
+Each returns (*Subscription[T], error); read sub.C, stop with sub.Unsubscribe(ctx). A slow reader never blocks the connection; messages queue until read. stream.SyncTime(ctx) aligns login timestamps (automatic on timestamp errors).
 Public: Tickers(instID)→Ticker, Trades(instID)→Trade, AllTrades(instID)→Trade, Candles(instID, bar)→Candle, MarkPriceCandles(instID, bar), IndexCandles(instID, bar), OrderBook(instID, Books|Books5|BBO|BooksL2TBT|Books50L2TBT|BooksRPI)→BookUpdate, MarkPrice(instID), IndexTickers(instID), FundingRate(instID), OpenInterest(instID), PriceLimit(instID), Liquidations(instType), Instruments(instType), OptionSummary(instFamily).
 Private (credentials): Account(ccy)→Balance, Positions(instType, instID)→Position, Orders(instType, instID)→Order, AlgoOrders(instType, instID)→AlgoOrder, LiquidationWarning(instType)→Position, BalanceAndPosition()→BalanceAndPosition.
 Raw: Subscribe(Arg{Channel, InstType, InstFamily, InstID, Ccy}) → Subscription[Push{Arg, Action, Data json.RawMessage}].
@@ -129,7 +129,8 @@ Batch results: OrderResult.Err(), AlgoOrderResult.Err().
 
 - Rate limiter per endpoint (per instrument for trade endpoints) waits instead of failing.
 - Retries: rate-limit and expired-timestamp for any method; network/5xx only for GET. Orders are never retried after a network error.
-- Stream reconnects with backoff, re-logs in, resubscribes; WithReconnectHook signals possible missed messages.
+- Stream reconnects with backoff, re-logs in, resubscribes (each confirmed; rejected ones close their C); WithReconnectHook signals possible missed messages.
+- Batch requests cost one rate-limit token per order; WebSocket trading shares the limiter and WithRequestTTL. A trade request is not retried once its TTL has passed.
 
 ## Docs
 
