@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 )
 
 // PlaceOrder places an order over the private WebSocket connection, which
@@ -36,7 +35,18 @@ func (s *Stream) AmendOrders(ctx context.Context, reqs []AmendOrderRequest) ([]O
 	return wsBatch(ctx, s, "batch-amend-orders", reqs)
 }
 
-func wsOne[T any](ctx context.Context, s *Stream, op string, args []T) (OrderResult, error) {
+// wsTradeEndpoints maps WebSocket trade operations to the REST endpoints
+// whose rate limits they share.
+var wsTradeEndpoints = map[string]string{
+	"order":               "POST /api/v5/trade/order",
+	"batch-orders":        "POST /api/v5/trade/batch-orders",
+	"cancel-order":        "POST /api/v5/trade/cancel-order",
+	"batch-cancel-orders": "POST /api/v5/trade/cancel-batch-orders",
+	"amend-order":         "POST /api/v5/trade/amend-order",
+	"batch-amend-orders":  "POST /api/v5/trade/amend-batch-orders",
+}
+
+func wsOne[T instrumented](ctx context.Context, s *Stream, op string, args []T) (OrderResult, error) {
 	res, err := wsTrade(ctx, s, op, args, false)
 	if err != nil {
 		return OrderResult{}, err
@@ -47,11 +57,11 @@ func wsOne[T any](ctx context.Context, s *Stream, op string, args []T) (OrderRes
 	return res[0], nil
 }
 
-func wsBatch[T any](ctx context.Context, s *Stream, op string, args []T) ([]OrderResult, error) {
+func wsBatch[T instrumented](ctx context.Context, s *Stream, op string, args []T) ([]OrderResult, error) {
 	return wsTrade(ctx, s, op, args, true)
 }
 
-func wsTrade[T any](ctx context.Context, s *Stream, op string, args []T, batch bool) ([]OrderResult, error) {
+func wsTrade[T instrumented](ctx context.Context, s *Stream, op string, args []T, batch bool) ([]OrderResult, error) {
 	if s.cfg.creds == nil {
 		return nil, ErrNoCredentials
 	}
@@ -59,9 +69,14 @@ func wsTrade[T any](ctx context.Context, s *Stream, op string, args []T, batch b
 	if err != nil {
 		return nil, err
 	}
+	if s.cfg.rateLimit {
+		if err := s.limiter.waitCost(ctx, wsTradeEndpoints[op], costPerInstrument(args)); err != nil {
+			return nil, err
+		}
+	}
 	var extra map[string]any
 	if s.cfg.requestTTL > 0 {
-		extra = map[string]any{"expTime": strconv.FormatInt(time.Now().Add(s.cfg.requestTTL).UnixMilli(), 10)}
+		extra = map[string]any{"expTime": strconv.FormatInt(s.now().Add(s.cfg.requestTTL).UnixMilli(), 10)}
 	}
 	m, err := c.roundTrip(ctx, op, args, extra)
 	if err != nil {

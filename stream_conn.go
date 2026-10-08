@@ -16,12 +16,11 @@ import (
 )
 
 const (
-	wsPingAfter     = 20 * time.Second
-	wsDeadAfter     = 30 * time.Second
-	wsReplyTimeout  = 15 * time.Second
-	wsWriteTimeout  = 10 * time.Second
-	wsReadLimit     = 32 << 20
-	wsResubscribeBy = 50
+	wsPingAfter    = 20 * time.Second
+	wsDeadAfter    = 30 * time.Second
+	wsReplyTimeout = 15 * time.Second
+	wsWriteTimeout = 10 * time.Second
+	wsReadLimit    = 32 << 20
 )
 
 type wsConn struct {
@@ -35,10 +34,11 @@ type wsConn struct {
 	groups    map[string]*group
 	pending   map[string]chan wsMessage
 	connected bool
+	closed    bool
 	lastErr   error
 
+	keyLocks sync.Map
 	lastRead atomic.Int64
-	busy     atomic.Bool
 }
 
 type group struct {
@@ -61,8 +61,8 @@ type wsMessage struct {
 func newWSConn(s *Stream, ep endpoint) *wsConn {
 	return &wsConn{
 		s:       s,
-		url:     s.cfg.wsURL + string(ep),
-		login:   s.cfg.creds != nil && ep != endpointPublic,
+		url:     s.cfg.wsURL + ep.path(),
+		login:   ep.private(),
 		changed: make(chan struct{}),
 		groups:  map[string]*group{},
 		pending: map[string]chan wsMessage{},
@@ -79,6 +79,11 @@ func (c *wsConn) run() {
 		if err != nil {
 			if c.s.ctx.Err() != nil {
 				return
+			}
+			if errors.Is(err, ErrTimestampExpired) {
+				ctx, cancel := context.WithTimeout(c.s.ctx, wsReplyTimeout)
+				_ = c.s.SyncTime(ctx)
+				cancel()
 			}
 			c.mu.Lock()
 			c.lastErr = err
@@ -100,20 +105,11 @@ func (c *wsConn) run() {
 		reconnected := c.connected
 		c.connected, c.ws, c.lastErr = true, ws, nil
 		c.signal()
-		args := make([]Arg, 0, len(c.groups))
-		for _, g := range c.groups {
-			args = append(args, g.arg)
-		}
 		c.mu.Unlock()
 
 		if reconnected {
-			c.resubscribe(ws, args)
-			log.Info("okx: websocket reconnected", "url", c.url, "subscriptions", len(args))
-			if hook := c.s.cfg.onReconnect; hook != nil {
-				go hook(c.url)
-			}
+			c.s.goroutine(c.restore)
 		}
-
 		err = c.readLoop(ws)
 		c.disconnect(ws)
 		if c.s.ctx.Err() == nil {
@@ -151,7 +147,7 @@ func (c *wsConn) connect() (*websocket.Conn, error) {
 
 func (c *wsConn) authenticate(ctx context.Context, ws *websocket.Conn) error {
 	creds := c.s.cfg.creds
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	ts := strconv.FormatInt(c.s.now().Unix(), 10)
 	msg, _ := json.Marshal(map[string]any{
 		"op": "login",
 		"args": []map[string]string{{
@@ -185,24 +181,74 @@ func (c *wsConn) authenticate(ctx context.Context, ws *websocket.Conn) error {
 	}
 }
 
+// restore resubscribes every channel after a reconnect. A channel that OKX
+// now rejects is dropped and its subscribers' channels are closed.
+func (c *wsConn) restore() {
+	c.mu.Lock()
+	args := make([]Arg, 0, len(c.groups))
+	for _, g := range c.groups {
+		args = append(args, g.arg)
+	}
+	c.mu.Unlock()
+
+	for _, arg := range args {
+		err := c.withKey(arg.key(), func() error {
+			c.mu.Lock()
+			_, ok := c.groups[arg.key()]
+			c.mu.Unlock()
+			if !ok {
+				return nil
+			}
+			return c.subscribeOp(c.s.ctx, "subscribe", arg)
+		})
+		var apiErr *APIError
+		switch {
+		case errors.As(err, &apiErr):
+			c.s.cfg.logger.Error("okx: subscription rejected after reconnect", "channel", arg.Channel, "inst_id", arg.InstID, "err", err)
+			c.drop(arg)
+		case err != nil:
+			return
+		}
+	}
+	c.s.cfg.logger.Info("okx: websocket reconnected", "url", c.url, "subscriptions", len(args))
+	if hook := c.s.cfg.onReconnect; hook != nil {
+		hook(c.url)
+	}
+}
+
+func (c *wsConn) drop(arg Arg) {
+	c.mu.Lock()
+	g := c.groups[arg.key()]
+	delete(c.groups, arg.key())
+	c.mu.Unlock()
+	if g != nil {
+		for sk := range g.sinks {
+			sk.shutdown()
+		}
+	}
+}
+
 func (c *wsConn) readLoop(ws *websocket.Conn) error {
 	c.lastRead.Store(time.Now().UnixNano())
 	ctx, stop := context.WithCancel(c.s.ctx)
-	defer stop()
-	go c.keepAlive(ctx, ws)
+	pinged := make(chan struct{})
+	go func() {
+		defer close(pinged)
+		c.keepAlive(ctx, ws)
+	}()
+	defer func() {
+		stop()
+		<-pinged
+	}()
 	for {
 		_, data, err := ws.Read(c.s.ctx)
 		if err != nil {
 			return err
 		}
-		if string(data) == "pong" {
-			c.lastRead.Store(time.Now().UnixNano())
-			continue
-		}
-		c.busy.Store(true)
-		c.handle(ws, data)
-		c.busy.Store(false)
 		c.lastRead.Store(time.Now().UnixNano())
+		if string(data) != "pong" {
+			c.handle(ws, data)
+		}
 	}
 }
 
@@ -214,9 +260,6 @@ func (c *wsConn) keepAlive(ctx context.Context, ws *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-		}
-		if c.busy.Load() {
-			continue
 		}
 		idle := time.Since(time.Unix(0, c.lastRead.Load()))
 		switch {
@@ -289,6 +332,7 @@ func (c *wsConn) disconnect(ws *websocket.Conn) {
 
 func (c *wsConn) shutdown() {
 	c.mu.Lock()
+	c.closed = true
 	ws := c.ws
 	groups := c.groups
 	c.groups = map[string]*group{}
@@ -299,20 +343,6 @@ func (c *wsConn) shutdown() {
 	for _, g := range groups {
 		for sk := range g.sinks {
 			sk.shutdown()
-		}
-	}
-}
-
-func (c *wsConn) resubscribe(ws *websocket.Conn, args []Arg) {
-	for i := 0; i < len(args); i += wsResubscribeBy {
-		batch := args[i:min(i+wsResubscribeBy, len(args))]
-		msg, _ := json.Marshal(map[string]any{"id": c.s.nextID(), "op": "subscribe", "args": batch})
-		ctx, cancel := context.WithTimeout(c.s.ctx, wsWriteTimeout)
-		err := ws.Write(ctx, websocket.MessageText, msg)
-		cancel()
-		if err != nil {
-			c.s.cfg.logger.Warn("okx: resubscribe failed", "url", c.url, "err", err)
-			return
 		}
 	}
 }
@@ -328,12 +358,14 @@ func (c *wsConn) signal() {
 func (c *wsConn) waitReady(ctx context.Context) (*websocket.Conn, error) {
 	for {
 		c.mu.Lock()
-		ws, changed, lastErr := c.ws, c.changed, c.lastErr
+		ws, changed, lastErr, closed := c.ws, c.changed, c.lastErr, c.closed
 		c.mu.Unlock()
-		if ws != nil {
+		switch {
+		case closed:
+			return nil, ErrStreamClosed
+		case ws != nil:
 			return ws, nil
-		}
-		if errors.Is(lastErr, ErrAuth) {
+		case errors.Is(lastErr, ErrAuth):
 			return nil, lastErr
 		}
 		select {
@@ -379,7 +411,7 @@ func (c *wsConn) roundTrip(ctx context.Context, op string, args any, extra map[s
 	}()
 
 	if err := ws.Write(ctx, websocket.MessageText, msg); err != nil {
-		return wsMessage{}, fmt.Errorf("okx: websocket %s: %w", op, err)
+		return wsMessage{}, fmt.Errorf("okx: websocket %s: %w", op, errors.Join(ErrDisconnected, err))
 	}
 	select {
 	case m, ok := <-reply:
@@ -405,70 +437,78 @@ func (c *wsConn) subscribeOp(ctx context.Context, op string, arg Arg) error {
 	return nil
 }
 
+// withKey serializes subscribe and unsubscribe operations on one channel so
+// the server and local state cannot diverge.
+func (c *wsConn) withKey(key string, fn func() error) error {
+	v, _ := c.keyLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
+}
+
 func (c *wsConn) add(ctx context.Context, arg Arg, sk sink) error {
 	key := arg.key()
-	c.mu.Lock()
-	g := c.groups[key]
-	isNew := g == nil
-	if isNew {
-		g = &group{arg: arg, sinks: map[sink]struct{}{}}
-		c.groups[key] = g
-	}
-	g.sinks[sk] = struct{}{}
-	c.mu.Unlock()
-	if !isNew {
-		return nil
-	}
-
-	err := c.subscribeOp(ctx, "subscribe", arg)
-	if err == nil || errors.Is(err, ErrDisconnected) {
-		return nil
-	}
-	c.mu.Lock()
-	var orphans []sink
-	if c.groups[key] == g {
-		delete(c.groups, key)
-		for other := range g.sinks {
-			if other != sk {
-				orphans = append(orphans, other)
-			}
+	return c.withKey(key, func() error {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return ErrStreamClosed
 		}
-	}
-	c.mu.Unlock()
-	for _, o := range orphans {
-		o.shutdown()
-	}
-	return err
+		if g := c.groups[key]; g != nil {
+			g.sinks[sk] = struct{}{}
+			c.mu.Unlock()
+			return nil
+		}
+		g := &group{arg: arg, sinks: map[sink]struct{}{sk: {}}}
+		c.groups[key] = g
+		c.mu.Unlock()
+
+		err := c.subscribeOp(ctx, "subscribe", arg)
+		if err == nil || errors.Is(err, ErrDisconnected) {
+			return nil
+		}
+		c.mu.Lock()
+		if c.groups[key] == g {
+			delete(c.groups, key)
+		}
+		c.mu.Unlock()
+		return err
+	})
 }
 
 func (c *wsConn) remove(ctx context.Context, arg Arg, sk sink) error {
 	key := arg.key()
-	c.mu.Lock()
-	g := c.groups[key]
-	if g == nil {
+	return c.withKey(key, func() error {
+		c.mu.Lock()
+		g := c.groups[key]
+		if g == nil {
+			c.mu.Unlock()
+			return nil
+		}
+		delete(g.sinks, sk)
+		empty := len(g.sinks) == 0
+		if empty {
+			delete(c.groups, key)
+		}
+		connected := c.ws != nil
 		c.mu.Unlock()
-		return nil
-	}
-	delete(g.sinks, sk)
-	empty := len(g.sinks) == 0
-	if empty {
-		delete(c.groups, key)
-	}
-	connected := c.ws != nil
-	c.mu.Unlock()
-	if !empty || !connected {
-		return nil
-	}
-	err := c.subscribeOp(ctx, "unsubscribe", arg)
-	if errors.Is(err, ErrDisconnected) || errors.Is(err, ErrStreamClosed) {
-		return nil
-	}
-	return err
+		if !empty || !connected {
+			return nil
+		}
+		err := c.subscribeOp(ctx, "unsubscribe", arg)
+		if errors.Is(err, ErrDisconnected) || errors.Is(err, ErrStreamClosed) {
+			return nil
+		}
+		return err
+	})
 }
 
 func (c *wsConn) resync(ctx context.Context, arg Arg) error {
-	if err := c.subscribeOp(ctx, "unsubscribe", arg); err != nil {
-		return err
-	}
-	return c.subscribeOp(ctx, "subscribe", arg)
+	return c.withKey(arg.key(), func() error {
+		if err := c.subscribeOp(ctx, "unsubscribe", arg); err != nil {
+			return err
+		}
+		return c.subscribeOp(ctx, "subscribe", arg)
+	})
 }

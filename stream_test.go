@@ -15,11 +15,12 @@ import (
 )
 
 type fakeOKX struct {
-	t     *testing.T
-	srv   *httptest.Server
-	ops   chan fakeOp
-	mu    sync.Mutex
-	conns []*websocket.Conn
+	t      *testing.T
+	srv    *httptest.Server
+	ops    chan fakeOp
+	mu     sync.Mutex
+	conns  []*websocket.Conn
+	reject map[string]bool
 }
 
 type fakeOp struct {
@@ -83,7 +84,10 @@ func (f *fakeOKX) respond(ws *websocket.Conn, id, op string, args []json.RawMess
 	case "subscribe", "unsubscribe":
 		var a Arg
 		_ = json.Unmarshal(args[0], &a)
-		if a.Channel == "bad" {
+		f.mu.Lock()
+		rejected := f.reject[a.InstID]
+		f.mu.Unlock()
+		if a.Channel == "bad" || (op == "subscribe" && rejected) {
 			send(map[string]string{"id": id, "event": "error", "code": "60018", "msg": "channel doesn't exist"})
 			return
 		}
@@ -107,6 +111,15 @@ func (f *fakeOKX) push(t *testing.T, conn int, msg string) {
 	if err := ws.Write(context.Background(), websocket.MessageText, []byte(msg)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (f *fakeOKX) rejectInst(instID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reject == nil {
+		f.reject = map[string]bool{}
+	}
+	f.reject[instID] = true
 }
 
 func (f *fakeOKX) dropAll() {
@@ -316,4 +329,105 @@ func TestStreamCloseClosesSubscriptions(t *testing.T) {
 	if _, err := s.Tickers(context.Background(), "ETH-USDT"); !errors.Is(err, ErrStreamClosed) {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestStreamSlowSubscriberDoesNotBlockConnection(t *testing.T) {
+	f := newFakeOKX(t)
+	s := NewStream(WithWebSocketURL(f.url()), WithStreamBuffer(1))
+	defer func() { _ = s.Close() }()
+	ctx := testCtx(t)
+
+	slow, err := s.Tickers(ctx, "BTC-USDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, "/ws/v5/public", "subscribe")
+	for _, px := range []string{"1", "2", "3", "4", "5"} {
+		f.push(t, 0, strings.Replace(tickerPush, "%s", px, 1))
+	}
+
+	quick, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := s.Tickers(quick, "ETH-USDT"); err != nil {
+		t.Fatalf("subscribe while another subscriber is not reading: %v", err)
+	}
+	for _, want := range []string{"1", "2", "3", "4", "5"} {
+		if tk := receive(t, slow.C); string(tk.Last) != want {
+			t.Fatalf("got %s, want %s", tk.Last, want)
+		}
+	}
+}
+
+func TestStreamDropsSubscriptionRejectedOnReconnect(t *testing.T) {
+	f := newFakeOKX(t)
+	reconnected := make(chan string, 1)
+	s := NewStream(WithWebSocketURL(f.url()), WithReconnectHook(func(url string) { reconnected <- url }))
+	defer func() { _ = s.Close() }()
+	ctx := testCtx(t)
+
+	gone, err := s.Tickers(ctx, "GONE-USDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := s.Tickers(ctx, "BTC-USDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rejectInst("GONE-USDT")
+	f.dropAll()
+	receive(t, reconnected)
+
+	select {
+	case _, ok := <-gone.C:
+		if ok {
+			t.Fatal("unexpected message")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rejected subscription was not closed")
+	}
+	f.push(t, 1, strings.Replace(tickerPush, "%s", "7", 1))
+	if tk := receive(t, kept.C); tk.Last != "7" {
+		t.Fatalf("ticker %+v", tk)
+	}
+}
+
+func TestStreamConcurrentSubscribersShareChannel(t *testing.T) {
+	f := newFakeOKX(t)
+	s := NewStream(WithWebSocketURL(f.url()))
+	defer func() { _ = s.Close() }()
+	ctx := testCtx(t)
+
+	subs := make([]*Subscription[Ticker], 8)
+	var wg sync.WaitGroup
+	for i := range subs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub, err := s.Tickers(ctx, "BTC-USDT")
+			if err != nil {
+				t.Error(err)
+			}
+			subs[i] = sub
+		}()
+	}
+	wg.Wait()
+	f.expect(t, "/ws/v5/public", "subscribe")
+	f.expectNone(t)
+	f.push(t, 0, strings.Replace(tickerPush, "%s", "9", 1))
+	for _, sub := range subs {
+		if tk := receive(t, sub.C); tk.Last != "9" {
+			t.Fatalf("ticker %+v", tk)
+		}
+	}
+}
+
+func TestStreamPublicBusinessChannelsSkipLogin(t *testing.T) {
+	f := newFakeOKX(t)
+	s := NewStream(WithWebSocketURL(f.url()), WithCredentials("key", "wrong", "pass"))
+	defer func() { _ = s.Close() }()
+
+	if _, err := s.Candles(testCtx(t), "BTC-USDT", Bar1H); err != nil {
+		t.Fatalf("public candles with bad credentials: %v", err)
+	}
+	f.expect(t, "/ws/v5/business", "subscribe")
 }

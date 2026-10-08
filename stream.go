@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -16,14 +17,17 @@ var (
 )
 
 // Stream is a WebSocket client for OKX push channels and WebSocket trading.
-// It opens the public, private and business connections lazily, keeps them
-// alive with pings, and on disconnect reconnects, logs in again and restores
-// every subscription. It is safe for concurrent use.
+// It opens connections lazily, keeps them alive with pings, and on
+// disconnect reconnects, logs in again and restores every subscription. It
+// is safe for concurrent use.
 type Stream struct {
-	cfg    config
-	ctx    context.Context
-	cancel context.CancelFunc
-	ids    atomic.Uint64
+	cfg     config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	ids     atomic.Uint64
+	rest    *Client
+	limiter *limiter
+	wg      sync.WaitGroup
 
 	mu     sync.Mutex
 	conns  map[endpoint]*wsConn
@@ -33,11 +37,20 @@ type Stream struct {
 // NewStream creates a Stream. No connection is made until the first
 // subscription or WebSocket trading call.
 func NewStream(opts ...Option) *Stream {
+	cfg := newConfig(opts)
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Stream{cfg: newConfig(opts), ctx: ctx, cancel: cancel, conns: map[endpoint]*wsConn{}}
+	return &Stream{
+		cfg:     cfg,
+		ctx:     ctx,
+		cancel:  cancel,
+		rest:    newClient(cfg),
+		limiter: newLimiter(),
+		conns:   map[endpoint]*wsConn{},
+	}
 }
 
-// Close disconnects and closes the channels of all subscriptions.
+// Close disconnects, closes the channels of all subscriptions and waits for
+// background goroutines to exit.
 func (s *Stream) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -52,10 +65,25 @@ func (s *Stream) Close() error {
 	for _, c := range conns {
 		c.shutdown()
 	}
+	s.wg.Wait()
 	return nil
 }
 
+// SyncTime aligns login and request expiry timestamps with OKX server time.
+// It runs automatically when OKX rejects a login timestamp.
+func (s *Stream) SyncTime(ctx context.Context) error { return s.rest.SyncTime(ctx) }
+
+func (s *Stream) now() time.Time { return s.rest.now() }
+
 func (s *Stream) nextID() string { return strconv.FormatUint(s.ids.Add(1), 10) }
+
+func (s *Stream) goroutine(fn func()) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		fn()
+	}()
+}
 
 func (s *Stream) conn(ep endpoint) (*wsConn, error) {
 	s.mu.Lock()
@@ -67,7 +95,7 @@ func (s *Stream) conn(ep endpoint) (*wsConn, error) {
 	if c == nil {
 		c = newWSConn(s, ep)
 		s.conns[ep] = c
-		go c.run()
+		s.goroutine(c.run)
 	}
 	return c, nil
 }
@@ -96,22 +124,22 @@ type Push struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-// Subscription delivers the messages of one channel on C. C is closed after
-// Unsubscribe or Stream.Close. Messages are delivered in order; a reader
-// that falls behind by more than the buffer size stalls the connection, so
-// consume C promptly.
+// Subscription delivers the messages of one channel on C in order. A slow
+// reader never blocks the connection or other subscriptions: undelivered
+// messages queue in memory until read. C is closed after Unsubscribe, after
+// Stream.Close, or when OKX rejects the subscription on reconnect.
 type Subscription[T any] struct {
 	C <-chan T
 
 	ch     chan T
+	mu     sync.Mutex
+	queue  []T
+	wake   chan struct{}
 	done   chan struct{}
-	mu     sync.RWMutex
-	closed bool
 	once   sync.Once
 	decode func(Push) ([]T, error)
 	conn   *wsConn
 	arg    Arg
-	stream *Stream
 }
 
 // Arg returns the channel this subscription is attached to.
@@ -134,17 +162,39 @@ func (s *Subscription[T]) Resync(ctx context.Context) error {
 func (s *Subscription[T]) deliver(p Push) {
 	items, err := s.decode(p)
 	if err != nil {
-		s.stream.cfg.logger.Warn("okx: decode push", "channel", p.Arg.Channel, "err", err)
+		s.conn.s.cfg.logger.Warn("okx: decode push", "channel", p.Arg.Channel, "err", err)
 		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.closed {
+	select {
+	case <-s.done:
 		return
+	default:
 	}
-	for _, it := range items {
+	s.mu.Lock()
+	s.queue = append(s.queue, items...)
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Subscription[T]) pump() {
+	defer close(s.ch)
+	for {
+		s.mu.Lock()
+		items := s.queue
+		s.queue = nil
+		s.mu.Unlock()
+		for _, it := range items {
+			select {
+			case s.ch <- it:
+			case <-s.done:
+				return
+			}
+		}
 		select {
-		case s.ch <- it:
+		case <-s.wake:
 		case <-s.done:
 			return
 		}
@@ -152,13 +202,7 @@ func (s *Subscription[T]) deliver(p Push) {
 }
 
 func (s *Subscription[T]) shutdown() {
-	s.once.Do(func() {
-		close(s.done)
-		s.mu.Lock()
-		s.closed = true
-		close(s.ch)
-		s.mu.Unlock()
-	})
+	s.once.Do(func() { close(s.done) })
 }
 
 type sink interface {
@@ -168,7 +212,7 @@ type sink interface {
 
 func subscribe[T any](ctx context.Context, s *Stream, arg Arg, decode func(Push) ([]T, error)) (*Subscription[T], error) {
 	ep := channelEndpoint(arg.Channel)
-	if ep == endpointPrivate && s.cfg.creds == nil {
+	if ep.private() && s.cfg.creds == nil {
 		return nil, ErrNoCredentials
 	}
 	c, err := s.conn(ep)
@@ -176,7 +220,15 @@ func subscribe[T any](ctx context.Context, s *Stream, arg Arg, decode func(Push)
 		return nil, err
 	}
 	ch := make(chan T, s.cfg.streamBuffer)
-	sub := &Subscription[T]{C: ch, ch: ch, done: make(chan struct{}), decode: decode, conn: c, arg: arg, stream: s}
+	sub := &Subscription[T]{
+		C: ch, ch: ch,
+		wake:   make(chan struct{}, 1),
+		done:   make(chan struct{}),
+		decode: decode,
+		conn:   c,
+		arg:    arg,
+	}
+	s.goroutine(sub.pump)
 	if err := c.add(ctx, arg, sub); err != nil {
 		sub.shutdown()
 		return nil, err
@@ -196,43 +248,68 @@ func (s *Stream) Subscribe(ctx context.Context, arg Arg) (*Subscription[Push], e
 	return subscribe(ctx, s, arg, func(p Push) ([]Push, error) { return []Push{p}, nil })
 }
 
-type endpoint string
+type endpoint int
 
 const (
-	endpointPublic   endpoint = "/ws/v5/public"
-	endpointPrivate  endpoint = "/ws/v5/private"
-	endpointBusiness endpoint = "/ws/v5/business"
+	endpointPublic endpoint = iota
+	endpointPrivate
+	endpointBusiness
+	endpointBusinessPrivate
 )
 
-var privateChannels = map[string]bool{
-	"account":              true,
-	"positions":            true,
-	"balance_and_position": true,
-	"orders":               true,
-	"fills":                true,
-	"liquidation-warning":  true,
-	"account-greeks":       true,
+func (e endpoint) path() string {
+	switch e {
+	case endpointPrivate:
+		return "/ws/v5/private"
+	case endpointBusiness, endpointBusinessPrivate:
+		return "/ws/v5/business"
+	}
+	return "/ws/v5/public"
 }
 
-var businessChannels = map[string]bool{
-	"trades-all":      true,
-	"orders-algo":     true,
-	"algo-advance":    true,
-	"deposit-info":    true,
-	"withdrawal-info": true,
+func (e endpoint) private() bool { return e == endpointPrivate || e == endpointBusinessPrivate }
+
+var channelEndpoints = map[string]endpoint{
+	"account":                   endpointPrivate,
+	"positions":                 endpointPrivate,
+	"balance_and_position":      endpointPrivate,
+	"orders":                    endpointPrivate,
+	"fills":                     endpointPrivate,
+	"liquidation-warning":       endpointPrivate,
+	"account-greeks":            endpointPrivate,
+	"trades-all":                endpointBusiness,
+	"sprd-public-trades":        endpointBusiness,
+	"sprd-bbo-tbt":              endpointBusiness,
+	"sprd-books5":               endpointBusiness,
+	"sprd-books-l2-tbt":         endpointBusiness,
+	"sprd-tickers":              endpointBusiness,
+	"public-struc-block-trades": endpointBusiness,
+	"public-block-trades":       endpointBusiness,
+	"block-tickers":             endpointBusiness,
+	"orders-algo":               endpointBusinessPrivate,
+	"algo-advance":              endpointBusinessPrivate,
+	"deposit-info":              endpointBusinessPrivate,
+	"withdrawal-info":           endpointBusinessPrivate,
+	"sprd-orders":               endpointBusinessPrivate,
+	"sprd-trades":               endpointBusinessPrivate,
+	"rfqs":                      endpointBusinessPrivate,
+	"quotes":                    endpointBusinessPrivate,
+	"struc-block-trades":        endpointBusinessPrivate,
+	"economic-calendar":         endpointBusinessPrivate,
 }
 
 func channelEndpoint(channel string) endpoint {
+	if ep, ok := channelEndpoints[channel]; ok {
+		return ep
+	}
 	switch {
-	case privateChannels[channel]:
-		return endpointPrivate
-	case businessChannels[channel],
-		strings.HasPrefix(channel, "candle"),
+	case strings.HasPrefix(channel, "candle"),
 		strings.HasPrefix(channel, "mark-price-candle"),
 		strings.HasPrefix(channel, "index-candle"),
-		strings.HasPrefix(channel, "sprd-"),
-		strings.HasPrefix(channel, "grid-"):
+		strings.HasPrefix(channel, "sprd-candle"):
 		return endpointBusiness
+	case strings.HasPrefix(channel, "grid-"):
+		return endpointBusinessPrivate
 	}
 	return endpointPublic
 }
