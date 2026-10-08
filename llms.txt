@@ -1,0 +1,138 @@
+# okx-golang
+
+> Go client for the OKX v5 API. Module github.com/kennnyz/okx-golang, package okx, Go 1.23+. REST via okx.Client, WebSocket push channels and WebSocket trading via okx.Stream.
+
+## Construction
+
+client := okx.NewClient(opts...)   // REST, safe for concurrent use
+stream := okx.NewStream(opts...)   // WebSocket, lazy connections, auto reconnect; defer stream.Close()
+
+Options: WithCredentials(apiKey, secretKey, passphrase), WithDemoTrading(), WithRegion(RegionGlobal|RegionEEA|RegionUS), WithRetry(n) (default 3), WithoutRateLimit(), WithRequestTTL(d), WithHTTPClient(hc), WithLogger(*slog.Logger), WithBaseURL(url), WithWebSocketURL(url), WithUserAgent(ua), WithStreamBuffer(n) (default 256), WithReconnectHook(func(url string)).
+
+Every method takes ctx context.Context first (omitted below).
+
+## Types
+
+- Number: string decimal ("65000.1"). Methods Float64(), Int64(), IsZero(), String(). Build with NumberFromFloat(f), NumberFromInt(i) or a string literal.
+- Time: wraps time.Time, decodes Unix-ms strings. TimeFromMillis(ms).
+- Bool, Int: decode values OKX sends as strings.
+- Enums: InstType (InstSpot, InstMargin, InstSwap, InstFutures, InstOption, InstAny), Side (SideBuy, SideSell), PosSide (PosSideLong, PosSideShort, PosSideNet), OrdType (OrdMarket, OrdLimit, OrdPostOnly, OrdFOK, OrdIOC, OrdOptimalLimitIOC, OrdRPI), TdMode (TdCash, TdCross, TdIsolated, TdSpotIso), MgnMode (MgnCross, MgnIsolated), OrderState (StateLive, StatePartiallyFilled, StateFilled, StateCanceled), TgtCcy (TgtBaseCcy, TgtQuoteCcy), PosMode (PosModeLongShort, PosModeNet), AlgoOrdType (AlgoConditional, AlgoOCO, AlgoTrigger, AlgoTrailing, AlgoTWAP, AlgoIceberg, AlgoChase), TriggerPxType (TriggerLast, TriggerIndex, TriggerMark), Bar (Bar1m, Bar5m, Bar15m, Bar1H, Bar4H, Bar1D, Bar1W, Bar1Dutc, ...), Account (AccountFunding "6", AccountTrading "18").
+- Instrument IDs: spot "BTC-USDT", perpetual "BTC-USDT-SWAP", futures "BTC-USDT-261225", option "BTC-USD-261225-80000-C", index "BTC-USD".
+
+## client.Market (public)
+
+Ticker(instID) (Ticker, error)
+Tickers(TickersRequest{InstType, InstFamily}) ([]Ticker, error)
+IndexTickers(IndexTickersRequest{QuoteCcy, InstID}) ([]IndexTicker, error)
+OrderBook(instID, depth) (OrderBook, error)            // depth ≤ 400
+FullOrderBook(instID, depth) (OrderBook, error)        // depth ≤ 5000
+Candles(CandlesRequest{InstID, Bar, After, Before, Limit}) ([]Candle, error)   // newest first, ≤ 300
+HistoryCandles(CandlesRequest) ([]Candle, error)       // years of history, ≤ 100
+AllHistoryCandles(CandlesRequest) iter.Seq2[Candle, error]
+IndexCandles, HistoryIndexCandles, MarkPriceCandles, HistoryMarkPriceCandles(CandlesRequest) ([]Candle, error)
+Trades(instID, limit) ([]Trade, error)
+HistoryTrades(HistoryTradesRequest{InstID, Type, After, Before, Limit}) ([]Trade, error)
+PlatformVolume24h() (PlatformVolume, error)
+CallAuction(instID) (CallAuction, error)
+
+Candle{Ts, Open, High, Low, Close, Vol, VolCcy, VolCcyQuote, Confirmed}. OrderBook{Asks, Bids []BookLevel{Px, Sz, Orders}, Ts, SeqID}. Ticker{InstID, Last, AskPx, AskSz, BidPx, BidSz, Open24h, High24h, Low24h, Vol24h, VolCcy24h, Ts}.
+
+## client.Public (public)
+
+Instruments(InstrumentsRequest{InstType, InstFamily, InstID}) ([]Instrument, error)   // TickSz, LotSz, MinSz, CtVal, ...
+Time() (time.Time, error)
+FundingRate(instID) (FundingRate, error)
+FundingRateHistory(FundingRateHistoryRequest{InstID, After, Before, Limit}) ([]FundingRateHistory, error)
+OpenInterest(OpenInterestRequest{InstType, InstFamily, InstID}) ([]OpenInterest, error)
+MarkPrice(MarkPriceRequest{InstType, InstFamily, InstID}) ([]MarkPrice, error)
+PriceLimit(instID) (PriceLimit, error)
+EstimatedPrice(instID) (EstimatedPrice, error)
+LiquidationOrders(LiquidationOrdersRequest{InstType, InstFamily, InstID, State, ...}) ([]Liquidation, error)
+PositionTiers(PositionTiersRequest{InstType, TdMode, InstFamily, InstID}) ([]PositionTier, error)
+ConvertContractCoin(ConvertContractCoinRequest{Type, InstID, Sz, Px, Unit}) (ContractConversion, error)
+OptionSummary(OptionSummaryRequest{InstFamily, ExpTime}) ([]OptionSummary, error)
+SystemStatus() ([]SystemStatus, error)
+TakerVolume(TakerVolumeRequest{Ccy, InstType, Period}) ([]TakerFlow, error)
+LongShortAccountRatio(LongShortRatioRequest{Ccy, Period}) ([]Ratio, error)
+
+## client.Account (credentials)
+
+Balance(ccys...) (Balance, error)                      // TotalEq, Details[]{Ccy, Eq, AvailBal, CashBal, Upl, EqUsd}
+Positions(PositionsRequest{InstType, InstID, PosID}) ([]Position, error)
+PositionsHistory(PositionsHistoryRequest) ([]PositionHistory, error)
+AllPositionsHistory(PositionsHistoryRequest) iter.Seq2[PositionHistory, error]
+Config() (AccountConfig, error)                        // .Permissions() → ["read_only","trade","withdraw"]
+SetLeverage(SetLeverageRequest{InstID, Ccy, Lever, MgnMode, PosSide}) (Leverage, error)
+LeverageInfo(LeverageInfoRequest{InstID, Ccy, MgnMode}) ([]Leverage, error)
+SetPositionMode(PosMode) error
+MaxOrderSize(MaxSizeRequest{InstID, TdMode, Px}) ([]MaxSize, error)
+MaxAvailSize(MaxAvailSizeRequest{InstID, TdMode}) ([]MaxAvailSize, error)
+TradeFee(TradeFeeRequest{InstType, InstID}) (TradeFee, error)
+Bills(BillsRequest) ([]Bill, error)                    // 7 days
+BillsArchive(BillsRequest) ([]Bill, error)             // 3 months
+AllBills(BillsRequest) iter.Seq2[Bill, error]
+AdjustMargin(AdjustMarginRequest{InstID, PosSide, Type "add"|"reduce", Amt}) (MarginAdjustment, error)
+MaxWithdrawal(ccys...) ([]MaxWithdrawal, error)
+
+## client.Trade (credentials)
+
+PlaceOrder(PlaceOrderRequest{InstID, TdMode, Side, OrdType, Sz, Px, PosSide, ClOrdID, ReduceOnly, TgtCcy, AttachAlgoOrds []AttachAlgoOrder{TpTriggerPx, TpOrdPx, SlTriggerPx, SlOrdPx}}) (OrderResult, error)
+PlaceOrders([]PlaceOrderRequest) ([]OrderResult, error)       // ≤ 20, check r.Err() per item
+CancelOrder(CancelOrderRequest{InstID, OrdID|ClOrdID}) (OrderResult, error)
+CancelOrders([]CancelOrderRequest) ([]OrderResult, error)
+AmendOrder(AmendOrderRequest{InstID, OrdID|ClOrdID, NewSz, NewPx}) (OrderResult, error)
+AmendOrders([]AmendOrderRequest) ([]OrderResult, error)
+ClosePosition(ClosePositionRequest{InstID, MgnMode, PosSide}) (ClosePositionResult, error)
+Order(OrderRequest{InstID, OrdID|ClOrdID}) (Order, error)
+PendingOrders(PendingOrdersRequest{InstType, InstID, ...}) ([]Order, error)
+OrdersHistory(OrdersHistoryRequest{InstType, ...}) ([]Order, error)        // 7 days
+OrdersHistoryArchive(OrdersHistoryRequest) ([]Order, error)                // 3 months
+AllOrdersHistory(OrdersHistoryRequest) iter.Seq2[Order, error]
+Fills(FillsRequest) ([]Fill, error)                                         // 3 days
+FillsHistory(FillsRequest{InstType required}) ([]Fill, error)              // 3 months
+AllFills(FillsRequest) iter.Seq2[Fill, error]
+CancelAllAfter(timeout time.Duration) (CancelAllAfterResult, error)        // dead man's switch, 10s–120s, 0 disarms
+PlaceAlgoOrder(PlaceAlgoOrderRequest{InstID, TdMode, Side, OrdType AlgoOrdType, Sz, ...}) (AlgoOrderResult, error)
+CancelAlgoOrders([]CancelAlgoOrderRequest{InstID, AlgoID}) ([]AlgoOrderResult, error)
+AmendAlgoOrder(AmendAlgoOrderRequest) (AlgoOrderResult, error)
+AlgoOrder(AlgoOrderRequest{AlgoID|AlgoClOrdID}) (AlgoOrder, error)
+PendingAlgoOrders(AlgoOrdersRequest{OrdType required}) ([]AlgoOrder, error)
+AlgoOrdersHistory(AlgoOrdersRequest{OrdType, State|AlgoID}) ([]AlgoOrder, error)
+
+okx.NewClientOrderID() string — random 32-char clOrdId.
+
+## client.Asset (credentials)
+
+Currencies(ccys...), Balances(ccys...), Transfer(TransferRequest{Ccy, Amt, From, To}), TransferState(transID), DepositAddresses(ccy), DepositHistory(DepositHistoryRequest), Withdraw(WithdrawRequest{Ccy, Amt, Dest "3"|"4", ToAddr, Chain}), CancelWithdrawal(wdID), WithdrawalHistory(WithdrawalHistoryRequest), Bills(AssetBillsRequest).
+
+## Any endpoint
+
+client.Do(ctx, method, path, params, &out) error — params: url.Values, map[string]string or struct with json tags (GET query) / JSON body (POST); out receives "data".
+client.SyncTime(ctx) error — align signature timestamps with server time.
+
+## Stream
+
+Each returns (*Subscription[T], error); read sub.C, stop with sub.Unsubscribe(ctx).
+Public: Tickers(instID)→Ticker, Trades(instID)→Trade, AllTrades(instID)→Trade, Candles(instID, bar)→Candle, MarkPriceCandles(instID, bar), IndexCandles(instID, bar), OrderBook(instID, Books|Books5|BBO|BooksL2TBT|Books50L2TBT|BooksRPI)→BookUpdate, MarkPrice(instID), IndexTickers(instID), FundingRate(instID), OpenInterest(instID), PriceLimit(instID), Liquidations(instType), Instruments(instType), OptionSummary(instFamily).
+Private (credentials): Account(ccy)→Balance, Positions(instType, instID)→Position, Orders(instType, instID)→Order, AlgoOrders(instType, instID)→AlgoOrder, LiquidationWarning(instType)→Position, BalanceAndPosition()→BalanceAndPosition.
+Raw: Subscribe(Arg{Channel, InstType, InstFamily, InstID, Ccy}) → Subscription[Push{Arg, Action, Data json.RawMessage}].
+Trading over WebSocket: PlaceOrder, PlaceOrders, CancelOrder, CancelOrders, AmendOrder, AmendOrders — same request types as REST.
+Local book: var b okx.Book; err := b.Apply(update); errors.Is(err, okx.ErrBookOutOfSync) → sub.Resync(ctx); b.Synced(), b.BestBid(), b.BestAsk().
+
+## Errors
+
+*okx.APIError{HTTPStatus, Code, Msg, Items []ItemError{Code, Msg}}; okx.HasCode(err, "51008").
+errors.Is sentinels: ErrRateLimited, ErrAuth, ErrTimestampExpired, ErrInvalidParameter, ErrInsufficientBalance, ErrOrderNotFound, ErrServiceUnavailable, ErrNoCredentials, ErrEmptyResponse, ErrStreamClosed, ErrDisconnected, ErrBookOutOfSync.
+Batch results: OrderResult.Err(), AlgoOrderResult.Err().
+
+## Behavior
+
+- Rate limiter per endpoint (per instrument for trade endpoints) waits instead of failing.
+- Retries: rate-limit and expired-timestamp for any method; network/5xx only for GET. Orders are never retried after a network error.
+- Stream reconnects with backoff, re-logs in, resubscribes; WithReconnectHook signals possible missed messages.
+
+## Docs
+
+- README: https://github.com/kennnyz/okx-golang#readme
+- AI agents guide: https://github.com/kennnyz/okx-golang/blob/main/docs/ai-agents.md
+- OKX API reference: https://www.okx.com/docs-v5/en/
