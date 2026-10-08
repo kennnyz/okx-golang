@@ -81,9 +81,7 @@ func (s *TradeService) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (O
 // PlaceOrders places up to 20 orders. Orders succeed or fail individually:
 // err is set only when the whole request failed, otherwise check each Err.
 func (s *TradeService) PlaceOrders(ctx context.Context, reqs []PlaceOrderRequest) ([]OrderResult, error) {
-	r := tradePost("/api/v5/trade/batch-orders", reqs, firstInst(reqs, func(r PlaceOrderRequest) string { return r.InstID }))
-	r.batch = true
-	return list[OrderResult](ctx, s.c, r)
+	return list[OrderResult](ctx, s.c, batchPost("/api/v5/trade/batch-orders", reqs))
 }
 
 type CancelOrderRequest struct {
@@ -98,9 +96,7 @@ func (s *TradeService) CancelOrder(ctx context.Context, req CancelOrderRequest) 
 
 // CancelOrders cancels up to 20 orders; check Err on each result.
 func (s *TradeService) CancelOrders(ctx context.Context, reqs []CancelOrderRequest) ([]OrderResult, error) {
-	r := tradePost("/api/v5/trade/cancel-batch-orders", reqs, firstInst(reqs, func(r CancelOrderRequest) string { return r.InstID }))
-	r.batch = true
-	return list[OrderResult](ctx, s.c, r)
+	return list[OrderResult](ctx, s.c, batchPost("/api/v5/trade/cancel-batch-orders", reqs))
 }
 
 type AmendOrderRequest struct {
@@ -137,9 +133,7 @@ func (s *TradeService) AmendOrder(ctx context.Context, req AmendOrderRequest) (O
 
 // AmendOrders amends up to 20 orders; check Err on each result.
 func (s *TradeService) AmendOrders(ctx context.Context, reqs []AmendOrderRequest) ([]OrderResult, error) {
-	r := tradePost("/api/v5/trade/amend-batch-orders", reqs, firstInst(reqs, func(r AmendOrderRequest) string { return r.InstID }))
-	r.batch = true
-	return list[OrderResult](ctx, s.c, r)
+	return list[OrderResult](ctx, s.c, batchPost("/api/v5/trade/amend-batch-orders", reqs))
 }
 
 type ClosePositionRequest struct {
@@ -228,7 +222,7 @@ type OrderRequest struct {
 // Order returns one order by ordId or clOrdId.
 func (s *TradeService) Order(ctx context.Context, req OrderRequest) (Order, error) {
 	r := privateGet("/api/v5/trade/order", req)
-	r.limitBy = req.InstID
+	r.cost = map[string]int{req.InstID: 1}
 	return one[Order](ctx, s.c, r)
 }
 
@@ -371,9 +365,6 @@ func NewClientOrderID() string {
 	return string(b)
 }
 
-func firstInst[T any](items []T, instID func(T) string) string {
-	if len(items) == 0 {
-		return ""
-	}
-	return instID(items[0])
-}
+func (r PlaceOrderRequest) instrument() string  { return r.InstID }
+func (r CancelOrderRequest) instrument() string { return r.InstID }
+func (r AmendOrderRequest) instrument() string  { return r.InstID }

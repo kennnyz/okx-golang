@@ -87,9 +87,7 @@ type CancelAlgoOrderRequest struct {
 
 // CancelAlgoOrders cancels up to 10 algo orders; check Err on each result.
 func (s *TradeService) CancelAlgoOrders(ctx context.Context, reqs []CancelAlgoOrderRequest) ([]AlgoOrderResult, error) {
-	r := tradePost("/api/v5/trade/cancel-algos", reqs, firstInst(reqs, func(r CancelAlgoOrderRequest) string { return r.InstID }))
-	r.batch = true
-	return list[AlgoOrderResult](ctx, s.c, r)
+	return list[AlgoOrderResult](ctx, s.c, batchPost("/api/v5/trade/cancel-algos", reqs))
 }
 
 type AmendAlgoOrderRequest struct {
@@ -200,3 +198,5 @@ func (s *TradeService) PendingAlgoOrders(ctx context.Context, req AlgoOrdersRequ
 func (s *TradeService) AlgoOrdersHistory(ctx context.Context, req AlgoOrdersRequest) ([]AlgoOrder, error) {
 	return list[AlgoOrder](ctx, s.c, privateGet("/api/v5/trade/orders-algo-history", req))
 }
+
+func (r CancelAlgoOrderRequest) instrument() string { return r.InstID }

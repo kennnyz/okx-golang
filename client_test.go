@@ -300,3 +300,48 @@ func TestLimiterWaits(t *testing.T) {
 	}
 	t.Fatal("cancelled context did not stop waiting")
 }
+
+func TestTradeRequestNotRetriedAfterExpiry(t *testing.T) {
+	var calls atomic.Int32
+	var expTimes []string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		expTimes = append(expTimes, r.Header.Get("expTime"))
+		_, _ = w.Write([]byte(`{"code":"50011","msg":"Too Many Requests","data":[]}`))
+	}, WithCredentials("k", "s", "p"), WithRequestTTL(50*time.Millisecond), WithRetry(5))
+
+	_, err := c.Trade.PlaceOrder(context.Background(), PlaceOrderRequest{InstID: "X"})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("err = %v", err)
+	}
+	if calls.Load() > 2 {
+		t.Fatalf("retried %d times past the request TTL", calls.Load())
+	}
+	for _, e := range expTimes {
+		if e != expTimes[0] {
+			t.Fatalf("expTime changed between attempts: %v", expTimes)
+		}
+	}
+}
+
+func TestBatchCostsOneTokenPerOrder(t *testing.T) {
+	l := newLimiter()
+	limits["POST /batch"] = rule{4, time.Second}
+	defer delete(limits, "POST /batch")
+
+	start := time.Now()
+	for range 2 {
+		if err := l.waitCost(context.Background(), "POST /batch", map[string]int{"A": 3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d := time.Since(start); d < 400*time.Millisecond {
+		t.Fatalf("6 orders at 4/s went through in %v", d)
+	}
+	if err := l.waitCost(context.Background(), "POST /batch", map[string]int{"B": 4}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 900*time.Millisecond {
+		t.Fatalf("other instrument waited for A's bucket: %v", d)
+	}
+}

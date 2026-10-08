@@ -38,7 +38,11 @@ type Client struct {
 // NewClient creates a REST client. Without WithCredentials only public
 // endpoints are available.
 func NewClient(opts ...Option) *Client {
-	c := &Client{cfg: newConfig(opts), limiter: newLimiter()}
+	return newClient(newConfig(opts))
+}
+
+func newClient(cfg config) *Client {
+	c := &Client{cfg: cfg, limiter: newLimiter()}
 	c.Market = &MarketService{c}
 	c.Public = &PublicService{c}
 	c.Account = &AccountService{c}
@@ -80,7 +84,8 @@ type request struct {
 	private bool
 	batch   bool
 	trade   bool
-	limitBy string
+	// cost is the rate limit tokens per instrument; nil means one token.
+	cost map[string]int
 }
 
 func publicGet(path string, params any) request {
@@ -96,7 +101,21 @@ func privatePost(path string, params any) request {
 }
 
 func tradePost(path string, params any, instID string) request {
-	return request{method: http.MethodPost, path: path, params: params, private: true, trade: true, limitBy: instID}
+	return request{method: http.MethodPost, path: path, params: params, private: true, trade: true, cost: map[string]int{instID: 1}}
+}
+
+func batchPost[T instrumented](path string, items []T) request {
+	return request{method: http.MethodPost, path: path, params: items, private: true, trade: true, batch: true, cost: costPerInstrument(items)}
+}
+
+type instrumented interface{ instrument() string }
+
+func costPerInstrument[T instrumented](items []T) map[string]int {
+	cost := map[string]int{}
+	for _, it := range items {
+		cost[it.instrument()]++
+	}
+	return cost
 }
 
 func list[T any](ctx context.Context, c *Client, r request) ([]T, error) {
@@ -125,14 +144,18 @@ func (c *Client) call(ctx context.Context, r request, out any) error {
 	if err != nil {
 		return err
 	}
+	var expires time.Time
+	if r.trade && c.cfg.requestTTL > 0 {
+		expires = c.now().Add(c.cfg.requestTTL)
+	}
 	synced := false
 	for attempt := 0; ; attempt++ {
 		if c.cfg.rateLimit {
-			if err := c.limiter.wait(ctx, r.method+" "+r.path, r.limitBy); err != nil {
+			if err := c.limiter.waitCost(ctx, r.method+" "+r.path, r.cost); err != nil {
 				return err
 			}
 		}
-		err = c.send(ctx, r, requestPath, body, out)
+		err = c.send(ctx, r, requestPath, body, expires, out)
 		if err == nil {
 			return nil
 		}
@@ -142,7 +165,7 @@ func (c *Client) call(ctx context.Context, r request, out any) error {
 				continue
 			}
 		}
-		if attempt >= c.cfg.retries || !retryable(r.method, err) {
+		if attempt >= c.cfg.retries || !retryable(r.method, err) || (!expires.IsZero() && c.now().After(expires)) {
 			return err
 		}
 		delay := backoff(attempt)
@@ -210,7 +233,7 @@ type itemStatus struct {
 	SMsg  string `json:"sMsg"`
 }
 
-func (c *Client) send(ctx context.Context, r request, requestPath string, body []byte, out any) error {
+func (c *Client) send(ctx context.Context, r request, requestPath string, body []byte, expires time.Time, out any) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -227,8 +250,8 @@ func (c *Client) send(ctx context.Context, r request, requestPath string, body [
 	if c.cfg.demo {
 		req.Header.Set("x-simulated-trading", "1")
 	}
-	if r.trade && c.cfg.requestTTL > 0 {
-		req.Header.Set("expTime", strconv.FormatInt(time.Now().Add(c.cfg.requestTTL).UnixMilli(), 10))
+	if !expires.IsZero() {
+		req.Header.Set("expTime", strconv.FormatInt(expires.UnixMilli(), 10))
 	}
 	if r.private {
 		ts := c.now().UTC().Format("2006-01-02T15:04:05.000Z")
@@ -257,7 +280,7 @@ func decodeResponse(status int, raw []byte, batch bool, out any) error {
 		if status != http.StatusOK {
 			return &APIError{HTTPStatus: status, Code: strconv.Itoa(status), Msg: http.StatusText(status)}
 		}
-		return fmt.Errorf("okx: decode response: %w", err)
+		return fmt.Errorf("okx: unexpected response: %.200s", raw)
 	}
 	partial := batch && (env.Code == "1" || env.Code == "2") && hasData(env.Data)
 	if env.Code != "0" && !partial {

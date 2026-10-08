@@ -101,19 +101,36 @@ type limiter struct {
 func newLimiter() *limiter { return &limiter{buckets: map[string]*bucket{}} }
 
 func (l *limiter) wait(ctx context.Context, endpoint, scope string) error {
+	return l.waitCost(ctx, endpoint, map[string]int{scope: 1})
+}
+
+// waitCost takes cost[scope] tokens from each scope's bucket. A nil cost
+// takes one token from the shared bucket.
+func (l *limiter) waitCost(ctx context.Context, endpoint string, cost map[string]int) error {
 	r, ok := limits[endpoint]
 	if !ok {
 		return nil
 	}
-	key := endpoint + " " + scope
+	if cost == nil {
+		cost = map[string]int{"": 1}
+	}
+	for scope, n := range cost {
+		if err := l.bucket(endpoint+" "+scope, r).take(ctx, min(n, r.n)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *limiter) bucket(key string, r rule) *bucket {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	b := l.buckets[key]
 	if b == nil {
 		b = &bucket{tokens: float64(r.n), capacity: float64(r.n), rate: float64(r.n) / r.per.Seconds(), last: time.Now()}
 		l.buckets[key] = b
 	}
-	l.mu.Unlock()
-	return b.wait(ctx)
+	return b
 }
 
 type bucket struct {
@@ -124,18 +141,19 @@ type bucket struct {
 	last     time.Time
 }
 
-func (b *bucket) wait(ctx context.Context) error {
+func (b *bucket) take(ctx context.Context, n int) error {
+	need := float64(n)
 	for {
 		b.mu.Lock()
 		now := time.Now()
 		b.tokens = min(b.capacity, b.tokens+now.Sub(b.last).Seconds()*b.rate)
 		b.last = now
-		if b.tokens >= 1 {
-			b.tokens--
+		if b.tokens >= need {
+			b.tokens -= need
 			b.mu.Unlock()
 			return nil
 		}
-		delay := time.Duration((1 - b.tokens) / b.rate * float64(time.Second))
+		delay := time.Duration((need - b.tokens) / b.rate * float64(time.Second))
 		b.mu.Unlock()
 
 		t := time.NewTimer(delay)
