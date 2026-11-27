@@ -405,6 +405,12 @@ The client is a solid base for LLM agents that read markets or trade. Every oper
 
 [docs/ai-agents.md](docs/ai-agents.md) shows how to expose the client as agent tools and which guardrails are worth having: demo mode, read-only keys, `clOrdId` idempotency, request TTL and the dead man's switch. [`llms.txt`](llms.txt) is a compact API reference to put into a model's context.
 
+**For coding agents** (Claude Code, Cursor, Codex and others), install the skill. It teaches the agent to write OKX code with this SDK, with safe defaults:
+
+```bash
+npx skills add kennnyz/okx-golang
+```
+
 ## Coverage
 
 74 REST methods across market data, public data, account, trade, algo orders and funding, plus 21 typed WebSocket channels. Each REST method is tested for its path, signing and response decoding.
