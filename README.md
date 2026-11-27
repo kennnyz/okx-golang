@@ -2,7 +2,7 @@
 
 # okx-golang
 
-**Typed Go client for the OKX v5 API**<br>
+**OKX Go SDK: a typed Go client for the OKX v5 API**<br>
 REST · WebSocket streams · WebSocket trading · local order book
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/kennnyz/okx-golang.svg)](https://pkg.go.dev/github.com/kennnyz/okx-golang)

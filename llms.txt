@@ -1,6 +1,6 @@
 # okx-golang
 
-> Go client for the OKX v5 API. Module github.com/kennnyz/okx-golang, package okx, Go 1.23+. REST via okx.Client, WebSocket push channels and WebSocket trading via okx.Stream.
+> OKX Go SDK: a typed Go client for the OKX v5 API. Module github.com/kennnyz/okx-golang, package okx, Go 1.23+. REST via okx.Client, WebSocket push channels and WebSocket trading via okx.Stream.
 
 ## Construction
 

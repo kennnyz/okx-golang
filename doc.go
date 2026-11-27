@@ -1,5 +1,5 @@
-// Package okx is a client for the OKX v5 API: REST, WebSocket push channels
-// and WebSocket trading.
+// Package okx is a Go SDK for the OKX v5 crypto exchange API: REST, WebSocket
+// push channels and WebSocket trading.
 //
 // Create a Client for request/response calls and a Stream for real-time
 // data. Both take the same options:
