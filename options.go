@@ -97,7 +97,7 @@ func WithRegion(r Region) Option { return func(c *config) { c.region = r } }
 // WithBaseURL overrides the REST base URL, e.g. "https://www.okx.com".
 func WithBaseURL(url string) Option { return func(c *config) { c.restURL = url } }
 
-// WithWebSocketURL overrides the WebSocket host, e.g. "wss://ws.okx.com:8443".
+// WithWebSocketURL overrides the WebSocket host, e.g. "wss://wseea.okx.com".
 // Paths /ws/v5/public, /ws/v5/private and /ws/v5/business are appended.
 func WithWebSocketURL(url string) Option { return func(c *config) { c.wsURL = url } }
 
