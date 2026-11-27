@@ -1,0 +1,15 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "okx-golang (OKX Go SDK)",
+  "description": "Typed Go SDK for the OKX v5 exchange API: REST, typed WebSocket channels with automatic reconnects, WebSocket trading, a local order book, safe retries and a per-endpoint rate limiter. Module github.com/kennnyz/okx-golang, package okx.",
+  "excludeFolders": [".github"],
+  "rules": [
+    "Import the module as okx \"github.com/kennnyz/okx-golang\"; the package name is okx.",
+    "Use okx.NewClient for REST and okx.NewStream for WebSocket; both take the same options.",
+    "Keep prices and sizes as strings or okx.Number; never convert money to float64.",
+    "Generate ClOrdID with okx.NewClientOrderID() before placing an order, and look the order up by ClOrdID after a timeout instead of sending it again.",
+    "Develop and test against demo trading with okx.WithDemoTrading() and a demo API key.",
+    "Match errors with errors.Is (okx.ErrInsufficientBalance, okx.ErrRateLimited) or okx.HasCode(err, code); for batch calls check each result's Err().",
+    "Use client.Do or stream.Subscribe for endpoints and channels the SDK does not wrap yet."
+  ]
+}
