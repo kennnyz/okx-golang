@@ -91,6 +91,11 @@ var limits = map[string]rule{
 	"POST /api/v5/asset/cancel-withdrawal":                      every1s(6),
 	"GET /api/v5/asset/withdrawal-history":                      every1s(6),
 	"GET /api/v5/asset/bills":                                   every1s(6),
+	"GET /api/v5/asset/convert/currencies":                      every1s(6),
+	"GET /api/v5/asset/convert/currency-pair":                   every1s(6),
+	"POST /api/v5/asset/convert/estimate-quote":                 {1, 5 * time.Second}, // per pair
+	"POST /api/v5/asset/convert/trade":                          every1s(10),
+	"GET /api/v5/asset/convert/history":                         every1s(6),
 }
 
 type limiter struct {

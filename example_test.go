@@ -40,6 +40,33 @@ func ExampleTradeService_PlaceOrder() {
 	}
 }
 
+func ExampleAssetService_Convert() {
+	ctx := context.Background()
+	client := okx.NewClient(okx.WithCredentials("key", "secret", "passphrase"))
+
+	// Spend 50 USDT on BTC from the funding account.
+	pair, err := client.Asset.ConvertPair(ctx, okx.ConvertPairRequest{FromCcy: "USDT", ToCcy: "BTC"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("min", pair.QuoteCcyMin, "max", pair.QuoteCcyMax, pair.QuoteCcy)
+
+	quote, err := client.Asset.ConvertQuote(ctx, okx.ConvertQuoteRequest{
+		BaseCcy: "BTC", QuoteCcy: "USDT", Side: okx.SideBuy, RfqSz: "50", RfqSzCcy: "USDT",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	trade, err := client.Asset.Convert(ctx, okx.ConvertRequest{
+		QuoteID: quote.QuoteID, BaseCcy: "BTC", QuoteCcy: "USDT", Side: okx.SideBuy,
+		Sz: quote.RfqSz, SzCcy: quote.RfqSzCcy,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(trade.State, trade.FillBaseSz, "BTC at", trade.FillPx)
+}
+
 func ExampleTradeService_AllFills() {
 	client := okx.NewClient(okx.WithCredentials("key", "secret", "passphrase"))
 	for fill, err := range client.Trade.AllFills(context.Background(), okx.FillsRequest{InstType: okx.InstSpot}) {

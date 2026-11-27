@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Convert API on `client.Asset`: `ConvertCurrencies`, `ConvertPair`, `ConvertQuote`, `Convert`, `ConvertHistory`. The rate limiter keeps quotes to one per pair every 5 seconds, as OKX requires.
+
 ## v0.1.1 — 2026-11-28
 
 - Agent skill in `skills/okx-golang`, installed with `npx skills add kennnyz/okx-golang`.

@@ -105,6 +105,8 @@ okx.NewClientOrderID() string — random 32-char clOrdId.
 
 Currencies(ccys...), Balances(ccys...), Transfer(TransferRequest{Ccy, Amt, From, To}), TransferState(transID), DepositAddresses(ccy), DepositHistory(DepositHistoryRequest), Withdraw(WithdrawRequest{Ccy, Amt, Dest "3"|"4", ToAddr, Chain}), CancelWithdrawal(wdID), WithdrawalHistory(WithdrawalHistoryRequest), Bills(AssetBillsRequest).
 
+Convert (swap at a quoted price, no order book): ConvertCurrencies() ([]string, error), ConvertPair(ConvertPairRequest{FromCcy, ToCcy}) (ConvertPair, error) — min/max per side, ConvertQuote(ConvertQuoteRequest{BaseCcy, QuoteCcy, Side, RfqSz, RfqSzCcy}) (ConvertQuoteResult, error) — one quote per pair per 5s, Convert(ConvertRequest{QuoteID, BaseCcy, QuoteCcy, Side, Sz, SzCcy}) (ConvertTrade, error) — check State "fullyFilled"|"rejected", ConvertHistory(ConvertHistoryRequest) ([]ConvertTrade, error).
+
 ## Any endpoint
 
 client.Do(ctx, method, path, params, &out) error — params: url.Values, map[string]string or struct with json tags (GET query) / JSON body (POST); out receives "data".

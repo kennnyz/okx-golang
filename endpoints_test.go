@@ -232,6 +232,26 @@ func TestEndpoints(t *testing.T) {
 			_, err := c.Asset.Bills(ctx, AssetBillsRequest{})
 			return err
 		}},
+		{"GET", "/api/v5/asset/convert/currencies", true, "", func(c *Client) error {
+			_, err := c.Asset.ConvertCurrencies(ctx)
+			return err
+		}},
+		{"GET", "/api/v5/asset/convert/currency-pair", true, "", func(c *Client) error {
+			_, err := c.Asset.ConvertPair(ctx, ConvertPairRequest{FromCcy: "USDT", ToCcy: "BTC"})
+			return err
+		}},
+		{"POST", "/api/v5/asset/convert/estimate-quote", true, "", func(c *Client) error {
+			_, err := c.Asset.ConvertQuote(ctx, ConvertQuoteRequest{BaseCcy: "BTC", QuoteCcy: "USDT", Side: SideBuy, RfqSz: "10", RfqSzCcy: "USDT"})
+			return err
+		}},
+		{"POST", "/api/v5/asset/convert/trade", true, "", func(c *Client) error {
+			_, err := c.Asset.Convert(ctx, ConvertRequest{QuoteID: "q1", BaseCcy: "BTC", QuoteCcy: "USDT", Side: SideBuy, Sz: "10", SzCcy: "USDT"})
+			return err
+		}},
+		{"GET", "/api/v5/asset/convert/history", true, "", func(c *Client) error {
+			_, err := c.Asset.ConvertHistory(ctx, ConvertHistoryRequest{})
+			return err
+		}},
 
 		// Trade
 		{"POST", "/api/v5/trade/batch-orders", true, "", func(c *Client) error {
