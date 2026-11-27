@@ -1,13 +1,21 @@
+<div align="center">
+
 # okx-golang
+
+**Typed Go client for the OKX v5 API**<br>
+REST · WebSocket streams · WebSocket trading · local order book
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/kennnyz/okx-golang.svg)](https://pkg.go.dev/github.com/kennnyz/okx-golang)
 [![CI](https://github.com/kennnyz/okx-golang/actions/workflows/ci.yml/badge.svg)](https://github.com/kennnyz/okx-golang/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kennnyz/okx-golang)](https://goreportcard.com/report/github.com/kennnyz/okx-golang)
+[![Go version](https://img.shields.io/github/go-mod/go-version/kennnyz/okx-golang)](go.mod)
+[![Release](https://img.shields.io/github/v/tag/kennnyz/okx-golang?label=release&sort=semver)](https://github.com/kennnyz/okx-golang/tags)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A typed, production-grade Go client for the [OKX v5 API](https://www.okx.com/docs-v5/en/): REST, WebSocket streams and WebSocket trading.
+[Install](#install) · [Quick start](#quick-start) · [Trading](#trading) · [Streams](#websocket-streams) · [Errors](#errors) · [Examples](#examples) · [API docs](https://pkg.go.dev/github.com/kennnyz/okx-golang)
 
-Use it to **automate your trading**, build bots and dashboards, or give **AI agents** safe, typed access to an exchange: every request and response is a Go struct, every error can be matched, and demo trading is one option away.
+</div>
+
+Automate your trading, build bots and dashboards, or give **AI agents** safe, typed access to an exchange. Every request and response is a Go struct, every error can be matched, and demo trading is one option away.
 
 ```go
 client := okx.NewClient()
@@ -17,18 +25,80 @@ fmt.Println(ticker.Last) // 82763.2
 
 ## Why this client
 
-- **Current with the API as of October 2026**: the new `openapi.okx.com` REST domain, WebSocket on port 443 (port 8443 was retired on 31 Oct 2026), `seqId`-based order books instead of the deprecated checksum, `rpi` order types, regional EEA and US domains.
-- **Typed WebSocket channels.** `stream.Tickers(...)` gives you a `<-chan Ticker`, not raw bytes. The same goes for order books, candles, orders, positions, balances and more.
-- **Connections that heal themselves.** Pings, reconnects with backoff, re-login and re-subscription happen automatically; a hook tells you when to reconcile.
-- **WebSocket trading.** Place, amend and cancel orders over the private WebSocket for lower latency.
-- **Local order book** with sequence-gap detection and one-call resync.
-- **Errors that make sense.** A rejected order returns the real reason (`51008 Insufficient balance`), not "All operations failed". Match it with `errors.Is(err, okx.ErrInsufficientBalance)`.
-- **Safe retries.** Rate-limited and expired-timestamp requests are retried because OKX did not process them. Orders are never retried after a network error, so a retry cannot duplicate them.
-- **Client-side rate limiter** set to the documented limit of every wrapped endpoint, per instrument where OKX limits per instrument.
-- **No precision loss.** Prices and sizes are `okx.Number` (the exact decimal string OKX sent); timestamps are `okx.Time` (a `time.Time`).
-- **Pagination as iterators** (Go 1.23 range-over-func): `for fill, err := range client.Trade.AllFills(ctx, req)`.
-- **Any endpoint** through `client.Do`, with signing, rate limiting and error handling included.
-- **Minimal dependencies**: the standard library plus [`coder/websocket`](https://github.com/coder/websocket).
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**📡 Typed WebSocket channels**<br>
+`stream.Tickers(...)` gives you a `<-chan Ticker`, not raw bytes. Same for order books, candles, orders, positions and balances.
+
+</td>
+<td width="50%" valign="top">
+
+**🔁 Connections that heal themselves**<br>
+Pings, reconnects with backoff, re-login and confirmed re-subscription happen automatically. A hook tells you when to reconcile.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🛡️ Retries that never duplicate orders**<br>
+Only requests OKX did not process are retried. Orders are never resent after a network error.
+
+</td>
+<td valign="top">
+
+**❗ Errors that make sense**<br>
+A rejected order returns the real reason (`51008 Insufficient balance`), not "All operations failed". Match it with `errors.Is`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**📚 Local order book**<br>
+`seqId` gap detection and one-call resync, as OKX recommends now that checksums are deprecated.
+
+</td>
+<td valign="top">
+
+**⚡ WebSocket trading**<br>
+Place, amend and cancel orders over the private WebSocket for lower latency, with the same types as REST.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🚦 Client-side rate limiter**<br>
+Set to the documented limit of every wrapped endpoint, per instrument where OKX limits per instrument.
+
+</td>
+<td valign="top">
+
+**🎯 No precision loss**<br>
+Prices and sizes are `okx.Number`, the exact decimal string OKX sent. Timestamps are `okx.Time`.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🔄 Pagination as iterators**<br>
+`for fill, err := range client.Trade.AllFills(ctx, req)` follows the OKX cursors for you.
+
+</td>
+<td valign="top">
+
+**🧩 Any endpoint, two dependencies**<br>
+`client.Do` reaches anything not wrapped yet. Only the standard library and [`coder/websocket`](https://github.com/coder/websocket).
+
+</td>
+</tr>
+</table>
+
+> **Current with the API as of October 2026:** the `openapi.okx.com` REST domain, WebSocket on port 443 (8443 was retired on 31 Oct 2026), `seqId` order books, `rpi` order types, EEA and US regions.
 
 ## Install
 
@@ -93,6 +163,9 @@ Accounts registered with **OKX EEA** or **OKX US** must use their region:
 client := okx.NewClient(okx.WithRegion(okx.RegionEEA))
 ```
 
+<details>
+<summary><b>All client options</b></summary>
+
 | Option | Purpose |
 |---|---|
 | `WithCredentials(key, secret, passphrase)` | Enable private endpoints and channels |
@@ -106,6 +179,8 @@ client := okx.NewClient(okx.WithRegion(okx.RegionEEA))
 | `WithBaseURL(url)`, `WithWebSocketURL(url)` | Override hosts |
 | `WithStreamBuffer(n)` | Channel capacity of each subscription (default 256) |
 | `WithReconnectHook(fn)` | Called after a WebSocket reconnects |
+
+</details>
 
 Signatures depend on your clock. If OKX rejects a request because its timestamp expired, the client syncs with server time and retries. You can also call `client.SyncTime(ctx)` at startup.
 
@@ -332,6 +407,11 @@ The client is a solid base for LLM agents that read markets or trade. Every oper
 
 ## Coverage
 
+74 REST methods across market data, public data, account, trade, algo orders and funding, plus 21 typed WebSocket channels. Each REST method is tested for its path, signing and response decoding.
+
+<details>
+<summary><b>Full list of wrapped endpoints</b></summary>
+
 | Area | Endpoints |
 |---|---|
 | Market | tickers, ticker, index tickers, order book, full order book, candles, history candles, index and mark price candles, trades, history trades, platform volume, call auction |
@@ -341,6 +421,8 @@ The client is a solid base for LLM agents that read markets or trade. Every oper
 | Algo | place, cancel, amend, get, pending, history |
 | Asset | currencies, funding balances, transfer, transfer state, deposit addresses, deposit history, withdraw, cancel withdrawal, withdrawal history, bills |
 | WebSocket | 21 typed channel methods, raw subscriptions, place/amend/cancel orders (single and batch) |
+
+</details>
 
 Missing something? Use `client.Do` or `stream.Subscribe`, and open an issue or a pull request.
 
@@ -365,6 +447,10 @@ go test -tags integration -run TestLive ./...    # live public REST and WebSocke
 OKX_DEMO_API_KEY=... OKX_DEMO_SECRET_KEY=... OKX_DEMO_PASSPHRASE=... \
   go test -tags integration -run TestLiveDemoPrivate ./...  # demo account: places and cancels an order
 ```
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
 
 ## Disclaimer
 
