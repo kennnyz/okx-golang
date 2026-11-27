@@ -17,7 +17,7 @@ fmt.Println(ticker.Last) // 82763.2
 
 ## Why this client
 
-- **Current with the API as of October 2026**: the new `openapi.okx.com` REST domain, WebSocket on port 443 (port 8443 is retired on 31 Oct 2026), `seqId`-based order books instead of the deprecated checksum, `rpi` order types, regional EEA and US domains.
+- **Current with the API as of October 2026**: the new `openapi.okx.com` REST domain, WebSocket on port 443 (port 8443 was retired on 31 Oct 2026), `seqId`-based order books instead of the deprecated checksum, `rpi` order types, regional EEA and US domains.
 - **Typed WebSocket channels.** `stream.Tickers(...)` gives you a `<-chan Ticker`, not raw bytes. The same goes for order books, candles, orders, positions, balances and more.
 - **Connections that heal themselves.** Pings, reconnects with backoff, re-login and re-subscription happen automatically; a hook tells you when to reconcile.
 - **WebSocket trading.** Place, amend and cancel orders over the private WebSocket for lower latency.
