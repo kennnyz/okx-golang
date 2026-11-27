@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.1 — 2026-11-28
 
 - Agent skill in `skills/okx-golang`, installed with `npx skills add kennnyz/okx-golang`.
 - `context7.json` for indexing on Context7.
