@@ -345,3 +345,17 @@ func TestBatchCostsOneTokenPerOrder(t *testing.T) {
 		t.Fatalf("other instrument waited for A's bucket: %v", d)
 	}
 }
+
+func TestDecodeErrorIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		reply(w, []string{"not an object"})
+	})
+	if _, err := c.Market.Ticker(context.Background(), "BTC-USDT"); err == nil {
+		t.Fatal("want decode error")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("calls = %d, want 1", n)
+	}
+}

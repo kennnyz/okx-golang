@@ -207,6 +207,10 @@ func retryable(method string, err error) bool {
 	if method != http.MethodGet {
 		return false
 	}
+	var decErr *decodeError
+	if errors.As(err, &decErr) {
+		return false
+	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		return errors.Is(err, ErrServiceUnavailable) || apiErr.HTTPStatus >= 500
@@ -290,10 +294,17 @@ func decodeResponse(status int, raw []byte, batch bool, out any) error {
 		return nil
 	}
 	if err := json.Unmarshal(env.Data, out); err != nil {
-		return fmt.Errorf("okx: decode data: %w", err)
+		return &decodeError{err}
 	}
 	return nil
 }
+
+// decodeError means the response did not match the Go type. Sending the
+// request again returns the same data, so it is never retried.
+type decodeError struct{ err error }
+
+func (e *decodeError) Error() string { return "okx: decode data: " + e.err.Error() }
+func (e *decodeError) Unwrap() error { return e.err }
 
 func hasData(d json.RawMessage) bool {
 	return len(d) > 0 && string(d) != "null" && string(d) != "[]" && string(d) != "{}"
