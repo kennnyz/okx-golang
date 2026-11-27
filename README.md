@@ -413,7 +413,7 @@ npx skills add kennnyz/okx-golang
 
 ## Coverage
 
-74 REST methods across market data, public data, account, trade, algo orders and funding, plus 21 typed WebSocket channels. Each REST method is tested for its path, signing and response decoding.
+79 REST methods across market data, public data, account, trade, algo orders, funding and convert, plus 21 typed WebSocket channels. Each REST method is tested for its path, signing and response decoding.
 
 <details>
 <summary><b>Full list of wrapped endpoints</b></summary>
@@ -425,7 +425,7 @@ npx skills add kennnyz/okx-golang
 | Account | balance, positions, positions history, config, set and get leverage, position mode, max order size, max available size, trade fee, bills (7 days and archive), adjust margin, max withdrawal |
 | Trade | place, batch place, cancel, batch cancel, amend, batch amend, close position, order, pending orders, history (7 days and archive), fills (3 days and history), cancel all after |
 | Algo | place, cancel, amend, get, pending, history |
-| Asset | currencies, funding balances, transfer, transfer state, deposit addresses, deposit history, withdraw, cancel withdrawal, withdrawal history, bills |
+| Asset | currencies, funding balances, transfer, transfer state, deposit addresses, deposit history, withdraw, cancel withdrawal, withdrawal history, bills, convert (currencies, pair limits, quote, trade, history) |
 | WebSocket | 21 typed channel methods, raw subscriptions, place/amend/cancel orders (single and batch) |
 
 </details>
