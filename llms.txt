@@ -1,6 +1,6 @@
 # okx-golang
 
-> Go client for the OKX v5 API. Module github.com/kennnyz/okx-golang, package okx, Go 1.23+. REST via okx.Client, WebSocket push channels and WebSocket trading via okx.Stream.
+> OKX Go SDK: a typed Go client for the OKX v5 API. Module github.com/kennnyz/okx-golang, package okx, Go 1.23+. REST via okx.Client, WebSocket push channels and WebSocket trading via okx.Stream.
 
 ## Construction
 
@@ -135,5 +135,6 @@ Batch results: OrderResult.Err(), AlgoOrderResult.Err().
 ## Docs
 
 - README: https://github.com/kennnyz/okx-golang#readme
+- Agent skill: https://github.com/kennnyz/okx-golang/blob/main/skills/okx-golang/SKILL.md (install: npx skills add kennnyz/okx-golang)
 - AI agents guide: https://github.com/kennnyz/okx-golang/blob/main/docs/ai-agents.md
 - OKX API reference: https://www.okx.com/docs-v5/en/

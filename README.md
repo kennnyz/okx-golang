@@ -2,7 +2,7 @@
 
 # okx-golang
 
-**Typed Go client for the OKX v5 API**<br>
+**OKX Go SDK: a typed Go client for the OKX v5 API**<br>
 REST · WebSocket streams · WebSocket trading · local order book
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/kennnyz/okx-golang.svg)](https://pkg.go.dev/github.com/kennnyz/okx-golang)
@@ -404,6 +404,12 @@ For GET, params can be `url.Values`, `map[string]string` or a struct with `json`
 The client is a solid base for LLM agents that read markets or trade. Every operation is a typed function with a typed result, which maps directly onto tool and function-calling schemas, and every failure has a stable code the agent can reason about.
 
 [docs/ai-agents.md](docs/ai-agents.md) shows how to expose the client as agent tools and which guardrails are worth having: demo mode, read-only keys, `clOrdId` idempotency, request TTL and the dead man's switch. [`llms.txt`](llms.txt) is a compact API reference to put into a model's context.
+
+**For coding agents** (Claude Code, Cursor, Codex and others), install the skill. It teaches the agent to write OKX code with this SDK, with safe defaults:
+
+```bash
+npx skills add kennnyz/okx-golang
+```
 
 ## Coverage
 

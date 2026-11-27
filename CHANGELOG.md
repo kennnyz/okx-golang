@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agent skill in `skills/okx-golang`, installed with `npx skills add kennnyz/okx-golang`.
+- `context7.json` for indexing on Context7.
 - Fix: a response that does not decode into the Go type is no longer retried. Before, a GET request repeated it up to three times.
 - Update `github.com/coder/websocket` to v1.8.15.
 - Tests: every REST endpoint is checked for method, path, signing and response decoding.
